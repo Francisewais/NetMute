@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build with the compiler that ships with Windows
         shell: cmd
@@ -35,7 +35,19 @@ jobs:
         shell: pwsh
         run: tools\test-cli.ps1 -Exe bin\NetMute.exe
 
-      - uses: actions/upload-artifact@v4
+      - name: Window test
+        timeout-minutes: 5
+        shell: powershell
+        run: tools\test-ui.ps1 -Exe bin\NetMute.exe -Screenshot window.png
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: window-screenshot
+          path: window.png
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v7
         with:
           name: NetMute
           path: bin/NetMute.exe
@@ -48,7 +60,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: NetMute
 

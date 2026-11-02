@@ -51,7 +51,7 @@ namespace NetMute
             bool isGui = args.Length == 0 || File.Exists(args[0]);
             if (!isGui && command != "selftest" && !Cli.IsCommand(command))
             {
-                Ui.Error(null, Cli.Usage);
+                Cli.Show(Cli.Usage);
                 return 2;
             }
 

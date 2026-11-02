@@ -76,7 +76,7 @@ NetMute selftest            自检
 
 `NetMute selftest` 会在你的电脑上实际验证：拿一份系统自带 `curl.exe` 的副本当被断网的程序，用真实连接检查它上不了网、也连不上本机代理端口，而其它程序照常联网，最后删掉所有测试规则。窗口里也能跑：“更多 → 运行自检”。
 
-每个发布版本都由 [GitHub Actions](.github/workflows/build.yml) 从源码编译，并在真实的 Windows 上跑过同样的自检才发布。
+每个发布版本都由 [GitHub Actions](.github/workflows/build.yml) 从源码编译，在真实的 Windows 上跑过同样的自检，以及命令行和窗口操作的测试，才会发布。
 
 ## 和其它办法比
 
@@ -96,7 +96,7 @@ build.cmd
 - 建一个最高优先级的子层，给每个程序加 6 条持久规则：出站和入站（IPv4、IPv6）拦截所有非本机流量，出站（IPv4、IPv6）再拦截本机代理端口。
 - 不装驱动，不注入进程，不改 Windows 防火墙的任何设置。
 
-`tools\test-cli.ps1` 用来测试命令行，`NetMute render main out.png` 能不用管理员权限把窗口画成图片，方便检查界面。
+`tools\test-cli.ps1` 和 `tools\test-ui.ps1` 用真实连接测试命令行和窗口操作（会清空所有规则，所以只在测试机上跑）。`NetMute render main out.png` 能不用管理员权限把窗口画成图片，方便检查界面。
 
 ## 开源协议
 

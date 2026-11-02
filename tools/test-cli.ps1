@@ -1,5 +1,6 @@
 # Runs block, toggle, unblock, list and clear against a copy of curl.exe and checks with real
 # connections that each one did its job. Needs administrator rights and an internet connection.
+# "clear" wipes every NetMute rule on the machine, so this refuses to run if there are any.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-cli.ps1 -Exe bin\NetMute.exe
 param([Parameter(Mandatory)][string]$Exe)
 
@@ -27,6 +28,17 @@ function Assert-That([string]$Name, [bool]$Passed) {
     if (-not $Passed) { $script:failed = $true }
 }
 
+function Get-BlockedList {
+    $file = Join-Path $folder 'list.txt'
+    $run = Start-Process -FilePath $Exe -ArgumentList 'list' -Wait -PassThru -RedirectStandardOutput $file
+    @{ ExitCode = $run.ExitCode; Text = (Get-Content $file -Raw) }
+}
+
+if ((Get-BlockedList).Text -match '\\') {
+    Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
+    throw 'This machine has NetMute rules, and this test would wipe them. Run it on a test machine.'
+}
+
 $failed = $false
 $url = $urls | Where-Object { Test-Online $_ } | Select-Object -First 1
 if (-not $url) { throw 'The test program cannot reach any test site before blocking.' }
@@ -35,10 +47,9 @@ try {
     Assert-That 'block exits with 0' ((Invoke-NetMute 'block', $subject) -eq 0)
     Assert-That 'program is offline after block' (-not (Test-Online $url))
 
-    $listFile = Join-Path $folder 'list.txt'
-    $list = Start-Process -FilePath $Exe -ArgumentList 'list' -Wait -PassThru -RedirectStandardOutput $listFile
+    $list = Get-BlockedList
     Assert-That 'list exits with 0' ($list.ExitCode -eq 0)
-    Assert-That 'list names the program' ((Get-Content $listFile -Raw) -like "*curl-subject.exe*")
+    Assert-That 'list names the program' ($list.Text -like "*curl-subject.exe*")
 
     Assert-That 'toggle exits with 0' ((Invoke-NetMute 'toggle', $subject) -eq 0)
     Assert-That 'program is online after toggling off' (Test-Online $url)
