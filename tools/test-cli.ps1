@@ -60,6 +60,16 @@ try {
     Assert-That 'unblock exits with 0' ((Invoke-NetMute 'unblock', $subject) -eq 0)
     Assert-That 'program is online after unblock' (Test-Online $url)
 
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = Join-Path $folder 'subject.lnk'
+    $link = $shell.CreateShortcut($shortcut)
+    $link.TargetPath = $subject
+    $link.Save()
+    Assert-That 'block accepts a shortcut' ((Invoke-NetMute 'block', $shortcut) -eq 0)
+    Assert-That 'the program behind the shortcut is offline' (-not (Test-Online $url))
+    Assert-That 'unblock accepts a shortcut' ((Invoke-NetMute 'unblock', $shortcut) -eq 0)
+    Assert-That 'the program behind the shortcut is online again' (Test-Online $url)
+
     Assert-That 'block of a missing file fails' ((Invoke-NetMute 'block', (Join-Path $folder 'missing.exe')) -ne 0)
     Assert-That 'an unknown command fails' ((Invoke-NetMute 'frobnicate') -ne 0)
 

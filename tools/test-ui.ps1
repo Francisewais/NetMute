@@ -1,7 +1,9 @@
-# Drives the real window through UI Automation and checks every step with real connections:
-# add a program, get offered its online helper, switch it off and on, allow all, close the
-# window, and find the rule still enforced. Needs administrator rights, an internet connection
-# and a desktop, and an English Windows, because it finds buttons by their text.
+# Drives the real window with UI Automation and real mouse clicks, and checks every step with
+# real connections: add a program, get offered its online helper, switch it off and on, allow
+# all, use the file and folder dialogs and the running-program picker, make and use a desktop
+# switch, close the window and find the rule still enforced, then remove everything.
+# Needs administrator rights, an internet connection and a free desktop (it moves the mouse),
+# and an English Windows, because it finds buttons by their text.
 # It wipes every NetMute rule at the end, so it refuses to run if there are any.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-ui.ps1 -Exe bin\NetMute.exe
 param(
@@ -10,7 +12,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class Mouse {
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+    public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+    public static void RightClick(int x, int y) { SetCursorPos(x, y); mouse_event(8, 0, 0, 0, UIntPtr.Zero); mouse_event(16, 0, 0, 0, UIntPtr.Zero); }
+}
+'@
 
 $Exe = (Resolve-Path $Exe).Path
 $folder = Join-Path ([IO.Path]::GetTempPath()) ("NetMute-ui-test-" + $PID)
@@ -22,6 +34,10 @@ Copy-Item (Join-Path $env:WINDIR 'System32\curl.exe') $helper
 
 $urls = 'http://www.msftconnecttest.com/connecttest.txt', 'https://www.baidu.com/', 'https://example.com/'
 $failed = $false
+
+# This file stays plain ASCII: Windows PowerShell does not read scripts as UTF-8 without a BOM.
+$dots = [string][char]0x2026
+$arrow = [string][char]0x25BE
 
 function Assert-That([string]$Name, [bool]$Passed) {
     Write-Output ("[{0}] {1}" -f $(if ($Passed) { 'PASS' } else { 'FAIL' }), $Name)
@@ -38,11 +54,20 @@ function Wait-Until([scriptblock]$Condition, [int]$Seconds = 20) {
     return $null
 }
 
-function Test-Online([string]$Url) {
+function Test-Online([string]$Url, [string]$Program = $subject) {
     # Windows PowerShell would otherwise treat anything curl prints on stderr as a fatal error.
     $ErrorActionPreference = 'Continue'
-    $code = & $subject -sS --noproxy '*' -o NUL -w '%{http_code}' --connect-timeout 8 --max-time 20 $Url 2>$null
+    $code = & $Program -sS --noproxy '*' -o NUL -w '%{http_code}' --connect-timeout 8 --max-time 20 $Url 2>$null
     $LASTEXITCODE -eq 0 -and "$code" -match '^[23]'
+}
+
+# A copy of curl in its own folder, so it has no relatives to be offered along with it.
+function New-TestProgram([string]$SubFolder, [string]$Name) {
+    $target = Join-Path $folder $SubFolder
+    New-Item -ItemType Directory -Path $target -Force | Out-Null
+    $path = Join-Path $target $Name
+    Copy-Item (Join-Path $env:WINDIR 'System32\curl.exe') $path
+    $path
 }
 
 function Get-BlockedList {
@@ -65,6 +90,40 @@ function Get-Windows([int]$ProcessId) {
 
 function Invoke-Button($Button) {
     $Button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+
+# Looks through all of the process's windows: dialogs and menus are windows of their own.
+function Find-Anywhere([int]$ProcessId, [string]$Name) {
+    $condition = New-Object Windows.Automation.PropertyCondition(
+        [Windows.Automation.AutomationElement]::NameProperty, $Name)
+    foreach ($w in Get-Windows $ProcessId) {
+        $found = $w.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+function Wait-Element([int]$ProcessId, [string]$Name) {
+    $found = Wait-Until { Find-Anywhere $ProcessId $Name }
+    if (-not $found) { throw "Did not find '$Name' on screen." }
+    $found
+}
+
+# A real click. Invoking a button that opens a dialog would block until the dialog closes.
+function Click-Element($Element) {
+    $point = $Element.GetClickablePoint()
+    [Mouse]::Click([int]$point.X, [int]$point.Y)
+}
+
+function Open-RowMenu($Row) {
+    $Row.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    $point = $Row.GetClickablePoint()
+    [Mouse]::RightClick([int]$point.X, [int]$point.Y)
+}
+
+# Types into whatever has the keyboard, like the file name box of a file dialog.
+function Send-Text([string]$Text) {
+    [Windows.Forms.SendKeys]::SendWait(($Text -replace '([+^%~(){}\[\]])', '{$1}'))
 }
 
 # A list row carries its check box either itself or as a child, depending on the Windows version.
@@ -172,6 +231,84 @@ try {
     Assert-That 'Allow all gives the network back' ($null -ne (Wait-Until { Test-Online $url }))
     Assert-That 'Allow all keeps the row' ($null -ne (Find-Element $window 'curl-subject.exe'))
 
+    # The file dialog
+    $viaDialog = New-TestProgram 'dialog' 'curl-dialog.exe'
+    Click-Element (Wait-Element $app.Id "Add program$dots")
+    Wait-Element $app.Id 'Choose a program to block' | Out-Null
+    Start-Sleep -Milliseconds 800
+    Send-Text $viaDialog
+    [Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Assert-That 'The file dialog adds and blocks a program' ($null -ne (Wait-Until { (Get-BlockedList) -like '*curl-dialog.exe*' }))
+    Assert-That 'That program is offline' (-not (Test-Online $url $viaDialog))
+
+    # The folder dialog
+    $viaFolderA = New-TestProgram 'whole' 'curl-folder-a.exe'
+    $viaFolderB = New-TestProgram 'whole\sub' 'curl-folder-b.exe'
+    Click-Element (Wait-Element $app.Id "Add folder$dots")
+    Wait-Element $app.Id 'Choose a folder of programs to block' | Out-Null
+    Start-Sleep -Milliseconds 800
+    Send-Text (Join-Path $folder 'whole')
+    [Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Start-Sleep -Milliseconds 800
+    $selectFolder = Find-Anywhere $app.Id 'Select Folder'
+    if ($selectFolder) { Invoke-Button $selectFolder }
+    $blockSelected = Wait-Element $app.Id 'Block selected'
+    Assert-That 'The folder dialog finds programs in subfolders' ($null -ne (Find-Anywhere $app.Id 'curl-folder-b.exe'))
+    Click-Element $blockSelected
+    Assert-That 'Both programs from the folder are blocked' ($null -ne (Wait-Until {
+        $text = Get-BlockedList
+        $text -like '*curl-folder-a.exe*' -and $text -like '*curl-folder-b.exe*'
+    }))
+    Assert-That 'A program from the folder is offline' (-not (Test-Online $url $viaFolderB))
+
+    # The running-program picker
+    $running = New-TestProgram 'picked' 'curl-picked.exe'
+    $savedHelper = $helper
+    $helper = $running
+    $runningProcess = Start-OnlineHelper
+    $helper = $savedHelper
+    if ($runningProcess) {
+        Click-Element (Wait-Element $app.Id "Pick a running program$dots")
+        Wait-Element $app.Id 'Block selected' | Out-Null
+        Start-Sleep -Milliseconds 800
+        Send-Text 'curl-picked'
+        $pickedRow = Wait-Element $app.Id 'curl-picked.exe'
+        $pickedRow.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Click-Element (Wait-Element $app.Id 'Block selected')
+        Assert-That 'The picker blocks a running program' ($null -ne (Wait-Until { (Get-BlockedList) -like '*curl-picked.exe*' }))
+        Assert-That 'The picked program loses its connection' ($null -ne (Wait-Until {
+            -not (Get-NetTCPConnection -OwningProcess $runningProcess.Id -State Established -ErrorAction SilentlyContinue)
+        }))
+        if (-not $runningProcess.HasExited) { $runningProcess.Kill() }
+    }
+    else {
+        Write-Output '[SKIP] Picker: the program could not get online'
+    }
+
+    # The desktop switch
+    $dialogRow = Wait-Element $app.Id 'curl-dialog.exe'
+    Open-RowMenu $dialogRow
+    Click-Element (Wait-Element $app.Id 'Create a switch on the desktop')
+    Invoke-Button (Wait-Element $app.Id 'OK')
+    $switch = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Network switch - curl-dialog.lnk'
+    Assert-That 'The desktop switch is created' (Test-Path $switch)
+    Start-Process $switch
+    Assert-That 'Double-clicking the switch gives the network back' ($null -ne (Wait-Until { Test-Online $url $viaDialog }))
+    Start-Process $switch
+    Assert-That 'Double-clicking it again takes it away' ($null -ne (Wait-Until { -not (Test-Online $url $viaDialog) }))
+    Start-Sleep -Seconds 3
+    Remove-Item $switch -Force
+
+    # Removing a row
+    $window.SetFocus()
+    Start-Sleep -Milliseconds 500
+    $dialogRow = Wait-Element $app.Id 'curl-dialog.exe'
+    Open-RowMenu $dialogRow
+    Click-Element (Wait-Element $app.Id 'Remove from list and allow')
+    Assert-That 'Removing a row gives the network back' ($null -ne (Wait-Until { Test-Online $url $viaDialog }))
+    Assert-That 'The row is gone' ($null -ne (Wait-Until { -not (Find-Element $window 'curl-dialog.exe') }))
+
+    # The rules live on without the window
     (Get-RowToggle (Find-Element $window 'curl-subject.exe')).Toggle()
     Assert-That 'Blocked once more' ($null -ne (Wait-Until { -not (Test-Online $url) }))
 
@@ -179,9 +316,25 @@ try {
     Assert-That 'The window closes' ($app.WaitForExit(15000) -and $app.ExitCode -eq 0)
     Assert-That 'The rule outlives the window' (-not (Test-Online $url))
 
-    $again = Start-Process -FilePath $Exe -ArgumentList 'clear' -Wait -PassThru
-    Assert-That 'Clear succeeds' ($again.ExitCode -eq 0)
-    Assert-That 'Online after clear' (Test-Online $url)
+    # A new window shows the old state, and can remove everything
+    $app = Start-Process -FilePath $Exe -PassThru
+    $window = Wait-Until {
+        Get-Windows $app.Id | Where-Object { $_.Current.Name -like 'NetMute*' } | Select-Object -First 1
+    }
+    $row = Wait-Until { Find-Element $window 'curl-subject.exe' }
+    Assert-That 'A new window shows the rule as checked' (
+        $row -and (Get-RowToggle $row).Current.ToggleState -eq [Windows.Automation.ToggleState]::On)
+
+    Click-Element (Wait-Element $app.Id "More $arrow")
+    Click-Element (Wait-Element $app.Id "Remove all rules$dots")
+    Invoke-Button (Wait-Element $app.Id 'Yes')
+    Invoke-Button (Wait-Element $app.Id 'OK')
+    Assert-That 'Remove all rules gives the network back' ($null -ne (Wait-Until { Test-Online $url }))
+    Assert-That 'Remove all rules empties the list' ($null -ne (Wait-Until { -not (Find-Element $window 'curl-subject.exe') }))
+    Assert-That 'No rules are left' ((Get-BlockedList) -notmatch '\\')
+
+    $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close()
+    Assert-That 'The new window closes' ($app.WaitForExit(15000) -and $app.ExitCode -eq 0)
 }
 finally {
     if ($app -and -not $app.HasExited) { $app.Kill() }
