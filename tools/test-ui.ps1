@@ -39,6 +39,8 @@ function Wait-Until([scriptblock]$Condition, [int]$Seconds = 20) {
 }
 
 function Test-Online([string]$Url) {
+    # Windows PowerShell would otherwise treat anything curl prints on stderr as a fatal error.
+    $ErrorActionPreference = 'Continue'
     $code = & $subject -sS --noproxy '*' -o NUL -w '%{http_code}' --connect-timeout 8 --max-time 20 $Url 2>$null
     $LASTEXITCODE -eq 0 -and "$code" -match '^[23]'
 }
@@ -77,13 +79,36 @@ function Get-RowToggle($Row) {
 }
 
 function Save-Picture($Window, [string]$Path) {
-    $r = $Window.Current.BoundingRectangle
-    $picture = New-Object Drawing.Bitmap([int]$r.Width, [int]$r.Height)
-    $g = [Drawing.Graphics]::FromImage($picture)
-    $g.CopyFromScreen([int]$r.X, [int]$r.Y, 0, 0, $picture.Size)
-    $g.Dispose()
-    $picture.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
-    $picture.Dispose()
+    try {
+        $r = $Window.Current.BoundingRectangle
+        $picture = New-Object Drawing.Bitmap([int]$r.Width, [int]$r.Height)
+        $g = [Drawing.Graphics]::FromImage($picture)
+        $g.CopyFromScreen([int]$r.X, [int]$r.Y, 0, 0, $picture.Size)
+        $g.Dispose()
+        $picture.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
+        $picture.Dispose()
+    }
+    catch {
+        Write-Output "No screenshot: $_"
+    }
+}
+
+# Starts a slow download with the helper, so it stays online for as long as the test needs.
+# Returns the process once it has a connection, or null if no server would give it one.
+function Start-OnlineHelper {
+    $downloads =
+        'https://codeload.github.com/microsoft/vscode/zip/refs/heads/main',
+        'https://speed.cloudflare.com/__down?bytes=100000000'
+    foreach ($download in $downloads) {
+        $process = Start-Process -FilePath $helper -PassThru -WindowStyle Hidden -ArgumentList `
+            '-s', '--noproxy', '"*"', '--limit-rate', '20k', '-o', 'NUL', '--max-time', '240', "`"$download`""
+        $online = Wait-Until -Seconds 12 {
+            Get-NetTCPConnection -OwningProcess $process.Id -State Established -ErrorAction SilentlyContinue
+        }
+        if ($online) { return $process }
+        if (-not $process.HasExited) { $process.Kill() }
+    }
+    return $null
 }
 
 if ((Get-BlockedList) -match '\\') {
@@ -98,12 +123,7 @@ $app = $null
 $helperProcess = $null
 try {
     # The helper plays steamwebhelper.exe: same folder, and online while its program is added.
-    $download = 'https://speed.cloudflare.com/__down?bytes=500000000'
-    $helperProcess = Start-Process -FilePath $helper -PassThru -WindowStyle Hidden `
-        -ArgumentList '-s', '--noproxy', '"*"', '--limit-rate', '20k', '-o', 'NUL', '--max-time', '240', "`"$download`""
-    $helperOnline = Wait-Until {
-        Get-NetTCPConnection -OwningProcess $helperProcess.Id -State Established -ErrorAction SilentlyContinue
-    }
+    $helperProcess = Start-OnlineHelper
 
     $app = Start-Process -FilePath $Exe -ArgumentList "`"$subject`"" -PassThru
     $window = Wait-Until {
@@ -112,7 +132,7 @@ try {
     Assert-That 'The window opens' ($null -ne $window)
     if (-not $window) { throw 'No window, nothing more to test.' }
 
-    if ($helperOnline) {
+    if ($helperProcess) {
         $accept = Wait-Until {
             foreach ($w in Get-Windows $app.Id) {
                 $button = Find-Element $w 'Block them too'
