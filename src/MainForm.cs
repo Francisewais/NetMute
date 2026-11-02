@@ -151,6 +151,7 @@ namespace NetMute
             list.FullRowSelect = true;
             list.CheckBoxes = true;
             list.HideSelection = false;
+            list.ShowItemToolTips = true;
             list.Sorting = SortOrder.Ascending;
             list.SmallImageList = icons;
             list.Columns.Add(L.T("程序", "Program"), Ui.Scaled(210));

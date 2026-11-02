@@ -35,9 +35,16 @@ namespace NetMute
                 return null;
             try
             {
-                StringBuilder name = new StringBuilder(32768);
-                int size = name.Capacity;
-                return QueryFullProcessImageName(process, 0, name, ref size) ? name.ToString() : null;
+                // The window asks about every process every two seconds, so start with a buffer
+                // that fits nearly all paths, not the longest one possible.
+                foreach (int capacity in new[] { 1024, 32768 })
+                {
+                    StringBuilder name = new StringBuilder(capacity);
+                    int size = name.Capacity;
+                    if (QueryFullProcessImageName(process, 0, name, ref size))
+                        return name.ToString();
+                }
+                return null;
             }
             finally
             {

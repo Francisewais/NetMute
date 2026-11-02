@@ -26,9 +26,9 @@ Windows 10 / 11 可用。只有一个 exe（不到 200 KB），不用安装，�
 
 ## 给 Steam 断网
 
-- 只选 `steam.exe`：Steam 连不上服务器，下载、更新、登录都会停，本地界面还能用。
+- 只选 `steam.exe`：Steam 连不上服务器，下载和更新会停。
 - 商店和社区页面是 `steamwebhelper.exe` 负责的。Steam 开着的时候添加 `steam.exe`，NetMute 会问你要不要把正在联网的 `steamwebhelper.exe` 等一起断掉。
-- 游戏是独立的程序，不受影响。想断某个游戏，就单独添加游戏的 exe。Steam 桌面上的游戏图标是网址快捷方式，没法直接用，请到 `steamapps\common` 里选 exe，或者在游戏运行时从“运行中的程序”里选。
+- 游戏是独立的程序，网络不会被一起断掉。想断某个游戏，就单独添加游戏的 exe。Steam 桌面上的游戏图标是网址快捷方式，没法直接用，请到 `steamapps\common` 里选 exe，或者在游戏运行时从“运行中的程序”里选。
 
 ## 断掉的是什么
 
